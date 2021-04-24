@@ -130,8 +130,7 @@ end;
 
 local V2 = Vector2.new;
 
-local StartPosition = game:GetService("Workspace").CurrentCamera.ViewportSize;
-StartPosition = Vector2.new(StartPosition.X / 2, StartPosition.Y / 2);
+local StartPosition = Vector2.new(0,0);
 
 local OldDrawing = Drawing;
 
