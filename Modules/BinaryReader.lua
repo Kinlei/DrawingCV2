@@ -28,7 +28,7 @@ function BinaryReader:ReadBytes(count, asArray)
 	local values = {}
 	
 	for i = 1, count do
-		values[i] = self:ReadByte()
+		table.insert(values, self:ReadByte())
 	end
 	
 	if asArray then
@@ -58,6 +58,7 @@ end
 
 function BinaryReader:ReadUInt16()
 	local upper, lower = self:ReadBytes(2)
+	warn(upper, lower)
 	return (upper * 256) + lower
 end
 
