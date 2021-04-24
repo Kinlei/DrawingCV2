@@ -11,8 +11,16 @@
 local PNG = {}
 PNG.__index = PNG
 
-local chunks = script.Chunks
-local modules = script.Modules
+local chunks = {}
+chunks.baseUrl = "https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Chunks/%s.lua"
+
+function chunks:FindFirstChild(chunkType)
+	return loadstring(string.format(chunks.baseUrl, chunkType))
+end;
+
+local require = function(funcToRequire)
+	return funcToRequire()
+end;
 
 local Deflate = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Modules/Deflate.lua"))()
 local Unfilter = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Modules/Unfilter.lua"))()
