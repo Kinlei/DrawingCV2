@@ -14,9 +14,9 @@ PNG.__index = PNG
 local chunks = script.Chunks
 local modules = script.Modules
 
-local Deflate = require(modules.Deflate)
-local Unfilter = require(modules.Unfilter)
-local BinaryReader = require(modules.BinaryReader)
+local Deflate = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Modules/Deflate.lua"))()
+local Unfilter = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Modules/Unfilter.lua"))()
+local BinaryReader = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Modules/BinaryReader.lua"))()
 
 local function getBytesPerPixel(colorType)
 	if colorType == 0 or colorType == 3 then
