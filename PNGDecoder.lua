@@ -19,7 +19,7 @@
 -- IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 -- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-local deflate = require("deflatelua")
+local deflate = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Deflate.lua"))()
 local requiredDeflateVersion = "0.3.20111128"
 
 if (deflate._VERSION ~= requiredDeflateVersion) then
