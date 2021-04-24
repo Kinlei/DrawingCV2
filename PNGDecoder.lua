@@ -1,306 +1,230 @@
--- The MIT License (MIT)
+---------------------------------------------------------------------------------------------
+-- @ CloneTrooper1019, 2019
+---------------------------------------------------------------------------------------------
+-- [PNG Library]
+--
+--  A module for opening PNG files into a readable bitmap.
+--  This implementation works with most PNG files.
+--
+---------------------------------------------------------------------------------------------
 
--- Copyright (c) 2013 DelusionalLogic
+local PNG = {}
+PNG.__index = PNG
 
--- Permission is hereby granted, free of charge, to any person obtaining a copy of
--- this software and associated documentation files (the "Software"), to deal in
--- the Software without restriction, including without limitation the rights to
--- use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
--- the Software, and to permit persons to whom the Software is furnished to do so,
--- subject to the following conditions:
+local chunks = script.Chunks
+local modules = script.Modules
 
--- The above copyright notice and this permission notice shall be included in all
--- copies or substantial portions of the Software.
+local Deflate = require(modules.Deflate)
+local Unfilter = require(modules.Unfilter)
+local BinaryReader = require(modules.BinaryReader)
 
--- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
--- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
--- FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
--- COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
--- IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
--- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-local deflate = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kinlei/DrawingCV2/main/Deflate.lua"))()
-local requiredDeflateVersion = "0.3.20111128"
-
-if (deflate._VERSION ~= requiredDeflateVersion) then
-    error("Incorrect deflate version: must be "..requiredDeflateVersion..", not "..deflate._VERSION)
+local function getBytesPerPixel(colorType)
+	if colorType == 0 or colorType == 3 then
+		return 1
+	elseif colorType == 4 then
+		return 2
+	elseif colorType == 2 then
+		return 3
+	elseif colorType == 6 then
+		return 4
+	else
+		return 0
+	end
 end
 
-local function bsRight(num, pow)
-    return math.floor(num / 2^pow)
+local function clampInt(value, min, max)
+	local num = tonumber(value) or 0
+	num = math.floor(num + .5)
+	
+	return math.clamp(num, min, max)
 end
 
-local function bsLeft(num, pow)
-    return math.floor(num * 2^pow)
+local function indexBitmap(file, x, y)
+	local width = file.Width
+	local height = file.Height
+	
+	local x = clampInt(x, 1, width) 
+	local y = clampInt(y, 1, height)
+	
+	local bitmap = file.Bitmap
+	local bpp = file.BytesPerPixel
+	
+	local i0 = ((x - 1) * bpp) + 1
+	local i1 = i0 + bpp
+	
+	return bitmap[y], i0, i1
 end
 
-local function bytesToNum(bytes)
-    local n = 0
-    for k,v in ipairs(bytes) do
-        n = bsLeft(n, 8) + v
-    end
-    if (n > 2147483647) then
-        return (n - 4294967296)
-    else
-        return n
-    end
-    n = (n > 2147483647) and (n - 4294967296) or n
-    return n
+function PNG:GetPixel(x, y)
+	local row, i0, i1 = indexBitmap(self, x, y)
+	local colorType = self.ColorType
+	
+	local color, alpha do
+		if colorType == 0 then
+			local gray = unpack(row, i0, i1)
+			color = Color3.fromHSV(0, 0, gray)
+			alpha = 255
+		elseif colorType == 2 then
+			local r, g, b = unpack(row, i0, i1)
+			color = Color3.fromRGB(r, g, b)
+			alpha = 255
+		elseif colorType == 3 then
+			local palette = self.Palette
+			local alphaData = self.AlphaData
+			
+			local index = unpack(row, i0, i1)
+			index = index + 1
+			
+			if palette then
+				color = palette[index]
+			end
+			
+			if alphaData then
+				alpha = alphaData[index]
+			end
+		elseif colorType == 4 then
+			local gray, a = unpack(row, i0, i1)
+			color = Color3.fromHSV(0, 0, gray)
+			alpha = a
+		elseif colorType == 6 then
+			local r, g, b, a = unpack(row, i0, i1)
+			color = Color3.fromRGB(r, g, b, a)
+			alpha = a
+		end
+	end
+	
+	if not color then
+		color = Color3.new()
+	end
+	
+	if not alpha then
+		alpha = 255
+	end
+	
+	return color, alpha
 end
 
-local function readInt(stream, bps)
-    local bytes = {}
-    bps = bps or 4
-    for i=1,bps do
-        bytes[i] = stream:read(1):byte()
-    end
-    return bytesToNum(bytes)
+function PNG.new(buffer)
+	-- Create the reader.
+	local reader = BinaryReader.new(buffer)
+	
+	-- Create the file object.
+	local file =
+	{
+		Chunks = {};
+		Metadata = {};
+		
+		Reading = true;
+		ZlibStream = "";
+	}
+	
+	-- Verify the file header.
+	local header = reader:ReadString(8)
+	
+	if header ~= "\137PNG\r\n\26\n" then
+		error("PNG - Input data is not a PNG file.", 2)
+	end
+	
+	while file.Reading do
+		local length = reader:ReadInt32()
+		local chunkType = reader:ReadString(4)
+		
+		local data, crc
+		
+		if length > 0 then
+			data = reader:ForkReader(length)
+			crc = reader:ReadUInt32()
+		end
+		
+		local chunk = 
+		{
+			Length = length;
+			Type = chunkType;
+			
+			Data = data;
+			CRC = crc;
+		}
+		
+		local handler = chunks:FindFirstChild(chunkType)
+		
+		if handler then
+			handler = require(handler)
+			handler(file, chunk)
+		end
+		
+		table.insert(file.Chunks, chunk)
+	end
+	
+	-- Decompress the zlib stream.
+	local success, response = pcall(function ()
+		local result = {}
+		local index = 0
+		
+		Deflate:InflateZlib
+		{
+			Input = BinaryReader.new(file.ZlibStream);
+			
+			Output = function (byte)
+				index = index + 1
+				result[index] = string.char(byte)
+			end
+		}
+		
+		return table.concat(result)
+	end)
+	
+	if not success then
+		error("PNG - Unable to unpack PNG data. " .. tostring(response), 2)
+	end
+	
+	-- Grab expected info from the file.
+	
+	local width = file.Width
+	local height = file.Height
+	
+	local bitDepth = file.BitDepth
+	local colorType = file.ColorType
+	
+	local buffer = BinaryReader.new(response)
+	file.ZlibStream = nil
+	
+	local bitmap = {}
+	file.Bitmap = bitmap
+	
+	local channels = getBytesPerPixel(colorType)
+	file.NumChannels = channels
+	
+	local bpp = math.max(1, channels * (bitDepth / 8))
+	file.BytesPerPixel = bpp
+	
+	-- Unfilter the buffer and 
+	-- load it into the bitmap.
+	
+	for row = 1, height do	
+		local filterType = buffer:ReadByte()
+		local scanline = buffer:ReadBytes(width * bpp, true)
+		
+		bitmap[row] = {}
+		
+		if filterType == 0 then
+			-- None
+			Unfilter:None(scanline, bitmap, bpp, row)
+		elseif filterType == 1 then
+			-- Sub
+			Unfilter:Sub(scanline, bitmap, bpp, row)
+		elseif filterType == 2 then
+			-- Up
+			Unfilter:Up(scanline, bitmap, bpp, row)
+		elseif filterType == 3 then
+			-- Average
+			Unfilter:Average(scanline, bitmap, bpp, row)
+		elseif filterType == 4 then
+			-- Paeth
+			Unfilter:Paeth(scanline, bitmap, bpp, row)
+		end
+	end
+	
+	return setmetatable(file, PNG)
 end
 
-local function readChar(stream, num)
-    num = num or 1
-    return stream:read(num)
-end
-
-local function readByte(stream)
-    return stream:read(1):byte()
-end
-
-local function getDataIHDR(stream, length)
-    local data = {}
-    data["width"] = readInt(stream)
-    data["height"] = readInt(stream)
-    data["bitDepth"] = readByte(stream)
-    data["colorType"] = readByte(stream)
-    data["compression"] = readByte(stream)
-    data["filter"] = readByte(stream)
-    data["interlace"] = readByte(stream)
-    return data
-end
-
-local function getDataIDAT(stream, length, oldData)
-    local data = {}
-    if (oldData == nil) then
-        data.data = readChar(stream, length)
-    else
-        data.data = oldData.data .. readChar(stream, length)
-    end
-    return data
-end
-
-local function getDataPLTE(stream, length)
-    local data = {}
-    data["numColors"] = math.floor(length/3)
-    data["colors"] = {}
-    for i = 1, data["numColors"] do
-        data.colors[i] = {
-            R = readByte(stream),
-            G = readByte(stream),
-            B = readByte(stream)
-        }
-    end
-    return data
-end
-
-local function extractChunkData(stream)
-    local chunkData = {}
-    local length
-    local type
-    local crc
-
-    while type ~= "IEND" do
-        length = readInt(stream)
-        type = readChar(stream, 4)
-        if (type == "IHDR") then
-            chunkData[type] = getDataIHDR(stream, length)
-        elseif (type == "IDAT") then
-            chunkData[type] = getDataIDAT(stream, length, chunkData[type])
-        elseif (type == "PLTE") then
-            chunkData[type] = getDataPLTE(stream, length)
-        else
-            readChar(stream, length)
-        end
-        crc = readChar(stream, 4)
-    end
-
-    return chunkData
-end
-
-local function makePixel(stream, depth, colorType, palette)
-    local bps = math.floor(depth/8) --bits per sample
-    local pixelData = { R = 0, G = 0, B = 0, A = 0 }
-    local grey
-    local index
-    local color 
-
-    if colorType == 0 then
-        grey = readInt(stream, bps)
-        pixelData.R = grey
-        pixelData.G = grey
-        pixelData.B = grey
-        pixelData.A = 255
-    elseif colorType == 2 then
-        pixelData.R = readInt(stream, bps)
-        pixelData.G = readInt(stream, bps)
-        pixelData.B = readInt(stream, bps)
-        pixelData.A = 255
-    elseif colorType == 3 then
-        index = readInt(stream, bps)+1
-        color = palette.colors[index]
-        pixelData.R = color.R
-        pixelData.G = color.G
-        pixelData.B = color.B
-        pixelData.A = 255
-    elseif colorType == 4 then
-        grey = readInt(stream, bps)
-        pixelData.R = grey
-        pixelData.G = grey
-        pixelData.B = grey
-        pixelData.A = readInt(stream, bps)
-    elseif colorType == 6 then
-        pixelData.R = readInt(stream, bps)
-        pixelData.G = readInt(stream, bps)
-        pixelData.B = readInt(stream, bps)
-        pixelData.A = readInt(stream, bps)
-    end
-
-    return pixelData
-end
-
-local function bitFromColorType(colorType)
-    if colorType == 0 then return 1 end
-    if colorType == 2 then return 3 end
-    if colorType == 3 then return 1 end
-    if colorType == 4 then return 2 end
-    if colorType == 6 then return 4 end
-    error 'Invalid colortype'
-end
-
-local function paethPredict(a, b, c)
-    local p = a + b - c
-    local varA = math.abs(p - a)
-    local varB = math.abs(p - b)
-    local varC = math.abs(p - c)
-
-    if varA <= varB and varA <= varC then 
-        return a 
-    elseif varB <= varC then 
-        return b 
-    else
-        return c
-    end
-end
-
-local function filterType1(curPixel, lastPixel)
-    local lastByte
-    local newPixel = {}
-    for fieldName, curByte in pairs(curPixel) do
-        lastByte = lastPixel and lastPixel[fieldName] or 0
-        newPixel[fieldName] = (curByte + lastByte) % 256
-    end
-    return newPixel
-end
-
-local prevPixelRow = {}
-local function getPixelRow(stream, depth, colorType, palette, length)
-    local pixelRow = {}
-    local bpp = math.floor(depth/8) * bitFromColorType(colorType)
-    local bpl = bpp*length
-    local filterType = readByte(stream)
-
-    if filterType == 0 then
-        for x = 1, length do
-            pixelRow[x] = makePixel(stream, depth, colorType, palette)
-        end
-    elseif filterType == 1 then
-        local curPixel
-        local lastPixel
-        local newPixel
-        local lastByte
-        for x = 1, length do
-            curPixel = makePixel(stream, depth, colorType, palette)
-            lastPixel = prevPixelRow[pixelNum]
-            newPixel = {}
-            for fieldName, curByte in pairs(curPixel) do
-                lastByte = lastPixel and lastPixel[fieldName] or 0
-                newPixel[fieldName] = (curByte + lastByte) % 256
-            end
-            pixelRow[x] = newPixel
-        end
-    else
-        error("Unsupported filter type: " .. tostring(filterType))
-    end
-    prevPixelRow = pixelRow
-
-    return pixelRow
-end
-
-
-local function pngImage(path, progCallback, verbose, memSave)
-    local stream = path
-    local chunkData
-    local imStr
-    local width = 0
-    local height = 0
-    local depth = 0
-    local colorType = 0
-    local output = {}
-    local pixels = {}
-    local StringStream
-    local function printV(msg)
-        if (verbose) then
-            print(msg)
-        end
-    end
-
-    if readChar(stream, 8) ~= "\137\080\078\071\013\010\026\010" then 
-        error "Not a png"
-    end
-
-    printV("Parsing Chunks...")
-    chunkData = extractChunkData(stream)
-
-    width = chunkData.IHDR.width
-    height = chunkData.IHDR.height
-    depth = chunkData.IHDR.bitDepth
-    colorType = chunkData.IHDR.colorType
-
-    printV("Deflating...")
-    deflate.inflate_zlib {
-        input = chunkData.IDAT.data, 
-        output = function(byte) 
-            output[#output+1] = string.char(byte) 
-        end, 
-        disable_crc = true
-    }
-    StringStream = {
-        str = table.concat(output),
-        read = function(self, num)
-            local toreturn = self.str:sub(1, num)
-            self.str = self.str:sub(num + 1, self.str:len())
-            return toreturn
-        end  
-    }
-
-    printV("Creating pixelmap...")
-    for i = 1, height do
-        local pixelRow = getPixelRow(StringStream, depth, colorType, chunkData.PLTE, width)
-        if progCallback ~= nil then 
-            progCallback(i, height, pixelRow)
-        end
-        if not memSave then
-            pixels[i] = pixelRow
-        end
-    end
-
-    printV("Done.")
-    return {
-        width = width,
-        height = height,
-        depth = depth,
-        colorType = colorType,
-        pixels = pixels
-    }
-end
-
-return pngImage
+return PNG
