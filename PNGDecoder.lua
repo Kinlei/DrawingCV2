@@ -237,7 +237,7 @@ end
 
 
 local function pngImage(path, progCallback, verbose, memSave)
-    local stream = io.open(path, "rb")
+    local stream = path
     local chunkData
     local imStr
     local width = 0
